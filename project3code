@@ -1,0 +1,219 @@
+#include <Arduino.h>
+
+
+
+const uint8_t LED1_PIN   = 13;   
+const uint8_t LED2_PIN   = 12; 
+const uint8_t PWM_PIN    = 9;    
+const uint8_t BUTTON_PIN = 2;    
+
+
+
+typedef void (*TaskFn)();
+
+struct Task {
+  TaskFn   fn;
+  uint16_t periodMs;       
+  uint32_t lastRunTimeMs;  
+};
+
+enum {
+  TASK_BLINK1 = 0,
+  TASK_BLINK2,
+  TASK_BUTTON,
+  TASK_PWM_UPDATE,
+  NUM_TASKS
+};
+
+Task tasks[NUM_TASKS];
+
+
+
+
+volatile uint16_t pwmCounter = 0;
+volatile uint16_t pwmTop     = 800;   
+volatile uint16_t pwmDuty    = 0;     
+
+
+const uint16_t dutyTable[9] = {0, 200, 400, 600, 800, 600, 400, 200, 0};
+const char*    dutyDesc[9]  = {
+  "motor off",
+  "motor at 2/8 duty",
+  "motor at 4/8 duty",
+  "motor at 6/8 duty",
+  "motor at 8/8 duty",
+  "motor at 6/8 duty",
+  "motor at 4/8 duty",
+  "motor at 2/8 duty",
+  "motor off"
+};
+
+volatile uint8_t dutyIndex = 0;   // 0..8
+
+
+bool lastStableState   = LOW;     
+bool debouncedState    = LOW;    
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelayMs = 25;  
+
+
+
+void setupTimer1ForPWM()
+{
+  noInterrupts();
+
+  TCCR1A = 0;
+  TCCR1B = 0;
+
+  
+  TCCR1B |= (1 << WGM12);
+
+  
+  OCR1A = 99;
+
+ 
+  TIMSK1 |= (1 << OCIE1A);
+
+  
+  TCCR1B |= (1 << CS11) | (1 << CS10);
+
+  interrupts();
+
+  pinMode(PWM_PIN, OUTPUT);
+}
+
+
+ISR(TIMER1_COMPA_vect)
+{
+  pwmCounter++;
+  if (pwmCounter >= pwmTop) {
+    pwmCounter = 0;
+  }
+
+  if (pwmCounter < pwmDuty) {
+    digitalWrite(PWM_PIN, HIGH);
+  } else {
+    digitalWrite(PWM_PIN, LOW);
+  }
+}
+
+
+// Blink LED1 (fast)
+void taskBlinkLED1()
+{
+  static bool state = false;
+  state = !state;
+  digitalWrite(LED1_PIN, state ? HIGH : LOW);
+}
+
+// Blink LED2 (slow)
+void taskBlinkLED2()
+{
+  static bool state = false;
+  state = !state;
+  digitalWrite(LED2_PIN, state ? HIGH : LOW);
+}
+
+
+void taskButton()
+{
+  int raw = digitalRead(BUTTON_PIN);
+
+  
+  if (raw != lastStableState) {
+    lastStableState = raw;
+    lastDebounceTime = millis();
+  }
+
+  
+  if ((millis() - lastDebounceTime) > debounceDelayMs) {
+    if (debouncedState != raw) {
+      debouncedState = raw;
+
+      
+      if (debouncedState == HIGH) {
+        dutyIndex = (dutyIndex + 1) % 9;   
+
+        
+        Serial.print("Button press: ");
+        Serial.print(dutyDesc[dutyIndex]);
+        Serial.print(" (index ");
+        Serial.print(dutyIndex);
+        Serial.println(")");
+      }
+    }
+  }
+}
+
+
+void taskUpdatePWMDuty()
+{
+  pwmDuty = dutyTable[dutyIndex];
+}
+
+
+
+void initTasks()
+{
+  
+  tasks[TASK_BLINK1].fn           = taskBlinkLED1;
+  tasks[TASK_BLINK1].periodMs     = 200;
+  tasks[TASK_BLINK1].lastRunTimeMs = 0;
+
+ 
+  tasks[TASK_BLINK2].fn           = taskBlinkLED2;
+  tasks[TASK_BLINK2].periodMs     = 700;
+  tasks[TASK_BLINK2].lastRunTimeMs = 0;
+
+  
+  tasks[TASK_BUTTON].fn           = taskButton;
+  tasks[TASK_BUTTON].periodMs     = 5;
+  tasks[TASK_BUTTON].lastRunTimeMs = 0;
+
+  
+  tasks[TASK_PWM_UPDATE].fn           = taskUpdatePWMDuty;
+  tasks[TASK_PWM_UPDATE].periodMs     = 20;
+  tasks[TASK_PWM_UPDATE].lastRunTimeMs = 0;
+}
+
+void runTasks()
+{
+  uint32_t now = millis();
+  for (uint8_t i = 0; i < NUM_TASKS; i++) {
+    if (now - tasks[i].lastRunTimeMs >= tasks[i].periodMs) {
+      tasks[i].lastRunTimeMs = now;
+      tasks[i].fn();
+    }
+  }
+}
+
+void setup()
+{
+  pinMode(LED1_PIN, OUTPUT);
+  pinMode(LED2_PIN, OUTPUT);
+
+  pinMode(BUTTON_PIN, INPUT);   
+
+  Serial.begin(9600);
+  Serial.println("Project #4: PWM Motor Controller Starting...");
+
+ 
+  setupTimer1ForPWM();
+
+  
+  initTasks();
+
+ 
+  dutyIndex = 0;
+  pwmDuty   = dutyTable[dutyIndex];
+
+  Serial.println("Initial state: motor off.");
+}
+
+
+void loop()
+{
+  runTasks();
+ 
+}
+`  
