@@ -1,0 +1,139 @@
+#include <Arduino.h>
+#include <Arduino_FreeRTOS.h>
+
+const uint8_t PWM_PIN=9;        
+const uint8_t BUTTON_PIN=2;
+const uint8_t LED2_PIN=12;     
+
+volatile uint16_t pwmCounter=0;
+volatile uint16_t pwmTop=800;
+volatile uint16_t pwmDuty=0;
+
+const uint16_t dutyTable[9]={0,200,400,600,800,600,400,200,0};
+const char* dutyDesc[9]={
+  "motor off",
+  "motor at 2/8 duty",
+  "motor at 4/8 duty",
+  "motor at 6/8 duty",
+  "motor at 8/8 duty",
+  "motor at 6/8 duty",
+  "motor at 4/8 duty",
+  "motor at 2/8 duty",
+  "motor off"
+};
+
+volatile uint8_t dutyIndex=0;
+
+bool lastStableState=LOW;
+bool debouncedState=LOW;
+unsigned long lastDebounceTimeMs=0;
+const unsigned long debounceDelayMs=25;
+
+volatile bool blinkOn=true;
+
+void TaskBlinkPWM(void *pvParameters);
+void TaskBlinkLED2(void *pvParameters);
+void TaskButton(void *pvParameters);
+void TaskUpdatePWMDuty(void *pvParameters);
+
+void setupTimer1ForPWM(){
+  noInterrupts();
+  TCCR1A=0;
+  TCCR1B=0;
+  TCCR1B|=(1<<WGM12);  
+  OCR1A=99;             
+  TIMSK1|=(1<<OCIE1A);  
+  TCCR1B|=(1<<CS11)|(1<<CS10); 
+  interrupts();
+  pinMode(PWM_PIN,OUTPUT);
+}
+
+ISR(TIMER1_COMPA_vect){
+  pwmCounter++;
+  if(pwmCounter>=pwmTop) pwmCounter=0;
+
+  
+  if(blinkOn && (pwmCounter<pwmDuty)){
+    digitalWrite(PWM_PIN,HIGH);
+  }else{
+    digitalWrite(PWM_PIN,LOW);
+  }
+}
+
+void setup(){
+  pinMode(PWM_PIN,OUTPUT);      
+  pinMode(LED2_PIN,OUTPUT);     
+  pinMode(BUTTON_PIN,INPUT);    
+
+  Serial.begin(9600);
+  Serial.println("Project #5 FreeRTOS PWM + Blink on Pin 9");
+
+  setupTimer1ForPWM();
+
+  dutyIndex=0;
+  pwmDuty=dutyTable[dutyIndex];
+  Serial.println("Initial state: motor off.");
+
+  
+  xTaskCreate(TaskBlinkPWM,"BlinkPWM",128,NULL,1,NULL);
+  
+  xTaskCreate(TaskBlinkLED2,"Blink2",128,NULL,1,NULL);
+  
+  xTaskCreate(TaskButton,"Button",256,NULL,2,NULL);
+  xTaskCreate(TaskUpdatePWMDuty,"PWMupd",128,NULL,2,NULL);
+
+  vTaskStartScheduler();
+}
+
+void loop(){} 
+
+void TaskBlinkPWM(void *pvParameters){
+  while(1){
+    blinkOn=true;
+    vTaskDelay(pdMS_TO_TICKS(900)); 
+
+    blinkOn=false;
+    vTaskDelay(pdMS_TO_TICKS(100)); 
+  }
+}
+
+void TaskBlinkLED2(void *pvParameters){
+  bool state=false;
+  while(1){
+    state=!state;
+    digitalWrite(LED2_PIN,state);
+    vTaskDelay(pdMS_TO_TICKS(700));
+  }
+}
+
+void TaskButton(void *pvParameters){
+  while(1){
+    int raw=digitalRead(BUTTON_PIN);
+
+    if(raw!=lastStableState){
+      lastStableState=raw;
+      lastDebounceTimeMs=millis();
+    }
+
+    if((millis()-lastDebounceTimeMs)>debounceDelayMs){
+      if(debouncedState!=raw){
+        debouncedState=raw;
+        if(debouncedState==HIGH){
+          dutyIndex=(dutyIndex+1)%9;
+          Serial.print("Duty: ");
+          Serial.print(dutyDesc[dutyIndex]);
+          Serial.print("  Index: ");
+          Serial.println(dutyIndex);
+        }
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
+void TaskUpdatePWMDuty(void *pvParameters){
+  while(1){
+    pwmDuty=dutyTable[dutyIndex];
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
