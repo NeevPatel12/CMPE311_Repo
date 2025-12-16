@@ -1,0 +1,79 @@
+#include <Arduino.h>
+#include <Arduino_FreeRTOS.h>
+#include <semphr.h>
+
+static const uint8_t PWM_PIN = 9;
+static const uint8_t BUTTON_PIN = 2;
+
+static const uint16_t BUTTON_POLL_MS = 10;
+static const uint16_t DEBOUNCE_MS = 25;
+
+static const uint8_t PWM_LEVELS = 6;
+static const uint8_t dutyMap[PWM_LEVELS] = {0, 51, 102, 153, 204, 255};
+
+static const uint8_t patternLen = 11;
+static const uint8_t levelPattern[patternLen] = {0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0};
+
+SemaphoreHandle_t buttonSem;
+
+void Task_Button(void *pvParameters);
+void Task_Motor(void *pvParameters);
+
+void setup() {
+  pinMode(PWM_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  analogWrite(PWM_PIN, 0);
+
+  buttonSem = xSemaphoreCreateBinary();
+
+  xTaskCreate(Task_Button, "Button", 128, NULL, 2, NULL);
+  xTaskCreate(Task_Motor, "Motor", 128, NULL, 1, NULL);
+
+  vTaskStartScheduler();
+}
+
+void loop() {}
+
+void Task_Button(void *pvParameters) {
+  bool lastStable = HIGH;
+
+  for (;;) {
+    bool now = digitalRead(BUTTON_PIN);
+
+    if (lastStable == HIGH && now == LOW) {
+      vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_MS));
+
+      if (digitalRead(BUTTON_PIN) == LOW) {
+        xSemaphoreGive(buttonSem);
+
+        while (digitalRead(BUTTON_PIN) == LOW) {
+          vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_MS));
+      }
+    }
+
+    lastStable = now;
+    vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
+  }
+}
+
+void Task_Motor(void *pvParameters) {
+  uint8_t patternIndex = 0;
+
+  for (;;) {
+    if (xSemaphoreTake(buttonSem, portMAX_DELAY) == pdTRUE) {
+      patternIndex++;
+      if (patternIndex >= patternLen) {
+        patternIndex = 0;
+      }
+
+      uint8_t level = levelPattern[patternIndex];
+      uint8_t duty = dutyMap[level];
+
+      analogWrite(PWM_PIN, duty);
+    }
+  }
+}
